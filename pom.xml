@@ -25,7 +25,7 @@
 		<!-- ############  NEXACROPLATFORM UIADAPTER17 REPOSITORY  ############ -->
 		<repository>
 			<id>tobesoft</id>
-				<url>http://mangosteen.tobesoft.co.kr/nexus/repository/maven-public</url>
+				<url>https://mangosteen.tobesoft.co.kr/nexus/repository/maven-public</url>
 			<releases>
 				<enabled>true</enabled>
 			</releases>
@@ -35,7 +35,7 @@
 		</repository>
 		<repository>
 			<id>mvn2</id>
-			<url>http://repo1.maven.org/maven2/</url>
+			<url>https://repo.maven.apache.org/maven2/</url>
 			<releases>
 				<enabled>true</enabled>
 			</releases>
@@ -45,17 +45,7 @@
 		</repository>
 		<repository>
 			<id>egovframe</id>
-			<url>http://www.egovframe.go.kr/maven/</url>
-			<releases>
-				<enabled>true</enabled>
-			</releases>
-			<snapshots>
-				<enabled>false</enabled>
-			</snapshots>
-		</repository>
-		<repository>
-			<id>egovframe2</id>
-			<url>http://maven.egovframe.kr:8080/maven/</url>
+			<url>https://maven.egovframe.go.kr/maven/</url>
 			<releases>
 				<enabled>true</enabled>
 			</releases>
