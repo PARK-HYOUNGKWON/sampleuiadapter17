@@ -1,0 +1,312 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FDL version="2.1">
+  <Form id="DynGrid" width="1280" height="720" titletext="동적 그리드 (서버 연동)" onload="DynGrid_onload">
+    <Layouts>
+      <Layout width="1280" height="720">
+        <Static id="sta_title" taborder="0" text="동적 그리드 - 서버 컬럼 정의(GRID_COL_DEF) 기반" left="20" top="12" width="500" height="26"/>
+
+        <Static id="sta_grid" taborder="1" text="화면 구분" left="20" top="48" width="70" height="26"/>
+        <Combo id="cbo_gridId" taborder="2" left="90" top="48" width="140" height="26"
+               innerdataset="ds_gridType" codecolumn="code" datacolumn="name" index="0"
+               onitemchanged="cbo_gridId_onitemchanged"/>
+        <Static id="sta_kw" taborder="3" text="검색어" left="250" top="48" width="50" height="26"/>
+        <Edit id="edt_keyword" taborder="4" left="300" top="48" width="160" height="26" onkeyup="edt_keyword_onkeyup"/>
+
+        <Button id="btn_search" taborder="5" text="조회"   left="470" top="48" width="60" height="26" onclick="btn_search_onclick"/>
+        <Button id="btn_add"    taborder="6" text="행추가" left="560" top="48" width="60" height="26" onclick="btn_add_onclick"/>
+        <Button id="btn_del"    taborder="7" text="행삭제" left="625" top="48" width="60" height="26" onclick="btn_del_onclick"/>
+        <Button id="btn_save"   taborder="8" text="저장"   left="690" top="48" width="60" height="26" onclick="btn_save_onclick"/>
+
+        <Grid id="grd_list" taborder="9" left="20" top="84" width="900" height="500"
+              autofittype="none" autoenter="select" onheadclick="grd_list_onheadclick"/>
+        <Static id="sta_cnt" taborder="10" text="" left="20" top="590" width="300" height="22"/>
+      </Layout>
+    </Layouts>
+    <Objects>
+      <Dataset id="ds_gridType">
+        <ColumnInfo>
+          <Column id="code" type="STRING" size="10"/>
+          <Column id="name" type="STRING" size="50"/>
+        </ColumnInfo>
+        <Rows>
+          <Row><Col id="code">EMP</Col><Col id="name">사원 관리</Col></Row>
+          <Row><Col id="code">DEPT</Col><Col id="name">부서 관리</Col></Row>
+        </Rows>
+      </Dataset>
+
+      <!-- 검색 조건 → @ParamDataSet(name="ds_search") Map -->
+      <Dataset id="ds_search">
+        <ColumnInfo>
+          <Column id="keyword" type="STRING" size="100"/>
+        </ColumnInfo>
+        <Rows>
+          <Row/>
+        </Rows>
+      </Dataset>
+
+      <!-- 서버에서 내려오는 컬럼 정의 / 데이터 -->
+      <Dataset id="ds_colDef"/>
+      <Dataset id="ds_data" onrowsetchanged="ds_data_onrowsetchanged"/>
+    </Objects>
+    <Bind>
+      <BindItem id="item0" compid="edt_keyword" propid="value" datasetid="ds_search" columnid="keyword"/>
+    </Bind>
+    <Script type="xscript5.1"><![CDATA[
+/***********************************************************
+ * 동적 그리드 (넥사크로 17 + Spring + MyBatis)
+ *
+ *  조회 : svc::selectDynGrid.do  → ds_colDef(컬럼 정의) + ds_data(데이터)
+ *  저장 : svc::saveDynGrid.do    → ds_data:U (변경된 행만 전송)
+ *
+ *  서버 : DynGridController → DynGridServiceImpl → DynGridMapper(.xml)
+ *  컬럼 정의 테이블 : GRID_COL_DEF (GRID_ID별 COL_ID, COL_NM, 폭, 정렬, 표시/편집 형식)
+ ***********************************************************/
+this.fv_gridId  = "EMP";
+this.fv_sortCol = "";
+this.fv_sortAsc = true;
+
+this.DynGrid_onload = function(obj, e)
+{
+    this.fn_search();
+};
+
+/*==========================================================
+ * 이벤트
+ *==========================================================*/
+this.btn_search_onclick = function(obj, e)
+{
+    if (this.fn_isChanged() && !this.confirm("저장하지 않은 변경 내용이 있습니다. 다시 조회할까요?")) return;
+    this.fn_search();
+};
+
+this.cbo_gridId_onitemchanged = function(obj, e)
+{
+    this.ds_search.setColumn(0, "keyword", "");
+    this.fn_search();
+};
+
+this.edt_keyword_onkeyup = function(obj, e)
+{
+    if (e.keycode == 13) this.btn_search_onclick();
+};
+
+this.btn_add_onclick = function(obj, e)
+{
+    var nRow = this.ds_data.addRow();
+    if (this.ds_data.getColumnInfo("chk") != null) {
+        this.ds_data.setColumn(nRow, "chk", "0");
+    }
+    this.grd_list.setCellPos(this.fn_firstEditCell());
+    this.grd_list.showEditor(true);
+};
+
+/* 체크된 행 삭제, 체크가 없으면 현재 행 삭제 */
+this.btn_del_onclick = function(obj, e)
+{
+    var ds = this.ds_data;
+    var bHasChk = (ds.getColumnInfo("chk") != null);
+    var bDeleted = false;
+
+    if (bHasChk) {
+        for (var i = ds.rowcount - 1; i >= 0; i--) {
+            if (ds.getColumn(i, "chk") == "1") {
+                ds.deleteRow(i);
+                bDeleted = true;
+            }
+        }
+    }
+    if (!bDeleted && ds.rowposition >= 0) {
+        ds.deleteRow(ds.rowposition);
+    }
+};
+
+this.btn_save_onclick = function(obj, e)
+{
+    if (!this.fn_isChanged()) {
+        this.alert("변경된 내용이 없습니다.");
+        return;
+    }
+    if (!this.fn_validate()) return;
+    if (!this.confirm("저장하시겠습니까?")) return;
+
+    this.transaction("save",
+                     "svc::saveDynGrid.do",
+                     "ds_data=ds_data:U",          // :U → 추가/수정/삭제된 행만 전송
+                     "",
+                     "gridId=" + this.fv_gridId,
+                     "fn_callback");
+};
+
+/* 헤더 클릭 정렬 */
+this.grd_list_onheadclick = function(obj, e)
+{
+    if (obj.getCellProperty("body", e.cell, "displaytype") == "checkboxcontrol") {
+        this.fn_toggleAllCheck();
+        return;
+    }
+    var sBind = obj.getCellProperty("body", e.cell, "text");
+    if (!sBind || sBind.indexOf("bind:") != 0) return;
+
+    var sColId = sBind.replace("bind:", "");
+    this.fv_sortAsc = (this.fv_sortCol == sColId) ? !this.fv_sortAsc : true;
+    this.fv_sortCol = sColId;
+    this.ds_data.set_keystring("S:" + (this.fv_sortAsc ? "+" : "-") + sColId);
+};
+
+this.ds_data_onrowsetchanged = function(obj, e)
+{
+    this.sta_cnt.set_text("총 " + obj.rowcount + "건");
+};
+
+/*==========================================================
+ * 트랜잭션
+ *==========================================================*/
+this.fn_search = function()
+{
+    this.fv_gridId  = this.cbo_gridId.value;
+    this.fv_sortCol = "";
+
+    this.transaction("search",
+                     "svc::selectDynGrid.do",
+                     "ds_search=ds_search",
+                     "ds_colDef=ds_colDef ds_data=ds_data",
+                     "gridId=" + this.fv_gridId,
+                     "fn_callback");
+};
+
+this.fn_callback = function(svcId, errCd, errMsg)
+{
+    if (errCd < 0) {
+        this.alert("[" + svcId + "] 오류\n" + errMsg);
+        return;
+    }
+
+    switch (svcId) {
+        case "search":
+            this.fn_prepareDataset();
+            this.fn_buildGrid(this.grd_list, "ds_data", this.ds_colDef);
+            this.sta_cnt.set_text("총 " + this.ds_data.rowcount + "건");
+            break;
+        case "save":
+            this.alert("저장되었습니다.");
+            this.fn_search();
+            break;
+    }
+};
+
+/*==========================================================
+ * 동적 그리드 생성
+ *==========================================================*/
+
+/* 컬럼 정의에는 있는데 서버 데이터에 없는 컬럼(예: chk)을 추가 */
+this.fn_prepareDataset = function()
+{
+    var ds = this.ds_data;
+    for (var i = 0; i < this.ds_colDef.rowcount; i++) {
+        var sColId = this.ds_colDef.getColumn(i, "colId");
+        if (ds.getColumnInfo(sColId) == null) {
+            ds.addColumn(sColId, this.ds_colDef.getColumn(i, "dataType") || "STRING", 256);
+        }
+    }
+    ds.applyChange();   // 컬럼 추가로 생긴 변경 상태 초기화
+};
+
+/* 컬럼 정의(ds_colDef) → Format XML 생성 → set_formats */
+this.fn_buildGrid = function(grd, sBindDs, dsDef)
+{
+    var sCols = "", sHead = "", sBody = "";
+
+    for (var i = 0; i < dsDef.rowcount; i++) {
+        var sId    = dsDef.getColumn(i, "colId");
+        var sNm    = this.fn_xml(dsDef.getColumn(i, "colNm"));
+        var nW     = dsDef.getColumn(i, "width") || 100;
+        var sAlign = dsDef.getColumn(i, "align") || "center";
+        var sDisp  = dsDef.getColumn(i, "dispType") || "normal";
+        var sEdit  = dsDef.getColumn(i, "editType") || "none";
+
+        sCols += '<Column size="' + nW + '"/>';
+        sHead += '<Cell col="' + i + '" text="' + sNm + '"/>';
+
+        var sCell = '<Cell col="' + i + '" text="bind:' + sId + '"'
+                  + ' textAlign="' + sAlign + '"'
+                  + ' displaytype="' + sDisp + '"'
+                  + ' edittype="' + sEdit + '"';
+        if (sDisp == "date") sCell += ' calendardateformat="yyyy-MM-dd"';
+        sBody += sCell + '/>';
+    }
+
+    var sFormat = '<Formats><Format id="default">'
+                + '<Columns>' + sCols + '</Columns>'
+                + '<Rows><Row size="30" band="head"/><Row size="28"/></Rows>'
+                + '<Band id="head">' + sHead + '</Band>'
+                + '<Band id="body">' + sBody + '</Band>'
+                + '</Format></Formats>';
+
+    grd.set_binddataset(sBindDs);
+    grd.set_formats(sFormat);
+};
+
+this.fn_xml = function(s)
+{
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+};
+
+/*==========================================================
+ * 유틸
+ *==========================================================*/
+
+/* 변경 여부: 추가(2)/수정(4) 행 또는 삭제된 행이 있는지 */
+this.fn_isChanged = function()
+{
+    var ds = this.ds_data;
+    if (ds.getDeletedRowCount() > 0) return true;
+    for (var i = 0; i < ds.rowcount; i++) {
+        var t = ds.getRowType(i);
+        if (t == Dataset.ROWTYPE_INSERT || t == Dataset.ROWTYPE_UPDATE) return true;
+    }
+    return false;
+};
+
+/* 필수값 체크: 컬럼 정의의 첫 번째 데이터 컬럼(PK)을 필수로 본다 */
+this.fn_validate = function()
+{
+    var nPkCell = this.fn_firstEditCell();
+    var sPkCol  = this.grd_list.getCellProperty("body", nPkCell, "text").replace("bind:", "");
+    var sPkNm   = this.grd_list.getCellProperty("head", nPkCell, "text");
+
+    for (var i = 0; i < this.ds_data.rowcount; i++) {
+        if (this.ds_data.getRowType(i) == Dataset.ROWTYPE_INSERT &&
+            !this.ds_data.getColumn(i, sPkCol)) {
+            this.alert((i + 1) + "번째 행의 [" + sPkNm + "]을(를) 입력하세요.");
+            this.ds_data.set_rowposition(i);
+            this.grd_list.setCellPos(nPkCell);
+            return false;
+        }
+    }
+    return true;
+};
+
+/* 체크박스 컬럼을 제외한 첫 번째 셀 */
+this.fn_firstEditCell = function()
+{
+    for (var i = 0; i < this.grd_list.getCellCount("body"); i++) {
+        if (this.grd_list.getCellProperty("body", i, "displaytype") != "checkboxcontrol") return i;
+    }
+    return 0;
+};
+
+/* 헤더 체크박스 클릭 시 전체 선택/해제 */
+this.fn_toggleAllCheck = function()
+{
+    var ds = this.ds_data;
+    if (ds.getColumnInfo("chk") == null || ds.rowcount == 0) return;
+
+    var sVal = (ds.getColumn(0, "chk") == "1") ? "0" : "1";
+    ds.set_enableevent(false);
+    for (var i = 0; i < ds.rowcount; i++) ds.setColumn(i, "chk", sVal);
+    ds.set_enableevent(true);
+};
+]]></Script>
+  </Form>
+</FDL>
